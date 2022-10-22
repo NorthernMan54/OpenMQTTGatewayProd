@@ -187,10 +187,7 @@ void MQTTtoPilight(char* topicOri, JsonObject& Pilightdata) {
       int msgLength = rf.stringToPulseTrain(raw, codes, MAXPULSESTREAMLENGTH);
       if (msgLength > 0) {
 #  ifdef ZradioCC1101
-        disableActiveReceiver();
-        ELECHOUSE_cc1101.Init();
-        pinMode(RF_EMITTER_GPIO, OUTPUT);
-        ELECHOUSE_cc1101.SetTx(receiveMhz); // set Transmit on
+        ELECHOUSE_cc1101.SetTx(CC1101_FREQUENCY); // set Transmit on
         rf.disableReceiver();
 #  endif
         rf.sendPulseTrain(codes, msgLength, repeats);
@@ -218,10 +215,7 @@ void MQTTtoPilight(char* topicOri, JsonObject& Pilightdata) {
     if (message && protocol) {
       Log.trace(F("MQTTtoPilight msg & protocol ok" CR));
 #  ifdef ZradioCC1101
-      disableActiveReceiver();
-      ELECHOUSE_cc1101.Init();
-      pinMode(RF_EMITTER_GPIO, OUTPUT);
-      ELECHOUSE_cc1101.SetTx(receiveMhz); // set Transmit on
+      ELECHOUSE_cc1101.SetTx(CC1101_FREQUENCY); // set Transmit on
       rf.disableReceiver();
 #  endif
       int msgLength = rf.send(protocol, message);
@@ -293,7 +287,6 @@ extern void enablePilightReceive() {
 #  endif
 
 #  ifdef ZradioCC1101
-  ELECHOUSE_cc1101.Init();
   ELECHOUSE_cc1101.SetRx(receiveMhz); // set Receive on
 #  endif
   rf.setCallback(pilightCallback);
