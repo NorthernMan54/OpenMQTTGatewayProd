@@ -165,6 +165,9 @@ struct GfSun2000Data {};
 #if defined(ZgatewayRS232)
 #  include "config_RS232.h"
 #endif
+#if defined(ZgatewayCloud)
+#  include "config_Cloud.h"
+#endif
 /*------------------------------------------------------------------------*/
 
 void setupTLS(bool self_signed = false, uint8_t index = 0);
@@ -416,6 +419,7 @@ void pubMQTT(const char* topic, const char* payload) {
  * @param retainFlag  true if retain the retain Flag
  */
 void pubMQTT(const char* topic, const char* payload, bool retainFlag) {
+  pubCloud(topic, payload, retainFlag);
   if (client.connected()) {
     SendReceiveIndicatorON();
     Log.trace(F("[ OMG->MQTT ] topic: %s msg: %s " CR), topic, payload);
@@ -678,7 +682,7 @@ void setup() {
   sprintf(gateway_name, "%.2s%.2s%.2s%.2s%.2s%.2s",
           s.c_str(), s.c_str() + 3, s.c_str() + 6, s.c_str() + 9, s.c_str() + 12, s.c_str() + 15);
   snprintf(WifiManager_ssid, MAC_NAME_MAX_LEN, "%s_%.2s%.2s", Gateway_Short_Name, s.c_str(), s.c_str() + 3);
-  strcpy(ota_hostname, WifiManager_ssid);
+  snprintf(ota_hostname, MAC_NAME_MAX_LEN, "%s_%s", Gateway_Short_Name, gateway_name);
   Log.notice(F("OTA Hostname: %s.local" CR), ota_hostname);
 #  endif
 #  ifdef WM_PWD_FROM_MAC // From ESP Mac Address, last 8 digits as the password
@@ -865,6 +869,10 @@ void setup() {
 #endif
 #ifdef ZsensorSHTC3
   setupSHTC3();
+#endif
+#ifdef ZgatewayCloud
+  setupCloud();
+  modules.add(ZgatewayCloud);
 #endif
 #ifdef ZgatewayRTL_433
   setupRTL_433();
@@ -1570,6 +1578,9 @@ void loop() {
 #endif
 #ifdef ZgatewayRTL_433
       RTL_433Loop();
+#endif
+#ifdef ZgatewayCloud
+      CloudLoop();
 #endif
     } else {
       // MQTT disconnected
