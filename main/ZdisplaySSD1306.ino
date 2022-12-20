@@ -75,8 +75,8 @@ void loopSSD1306() {
         break;
       default:
         // TODO: Display splash screen x seconds after last message displayed on OLED
-      //  Oled.fillScreen(WHITE);
-      //  Oled.drawLogo((int)OLED_WIDTH * 0.24, (int)(OLED_WIDTH / 2) - OLED_WIDTH * 0.2, (int)(OLED_HEIGHT / 2) + OLED_HEIGHT * 0.2, true, true, true, true, true, true); // Name
+        //  Oled.fillScreen(WHITE);
+        //  Oled.drawLogo((int)OLED_WIDTH * 0.24, (int)(OLED_WIDTH / 2) - OLED_WIDTH * 0.2, (int)(OLED_HEIGHT / 2) + OLED_HEIGHT * 0.2, true, true, true, true, true, true); // Name
         break;
     }
   }
