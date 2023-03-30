@@ -1924,16 +1924,16 @@ void storeSignalValue(SIGNAL_SIZE_UL_ULL MQTTvalue) {
   unsigned long now = millis();
   // find oldest value of the buffer
   int o = getMin();
-  log.trace(F("Min ind: %d" CR), o);
+  Log.trace(F("Min ind: %d" CR), o);
   // replace it by the new one
   receivedSignal[o].value = MQTTvalue;
   receivedSignal[o].time = now;
 
   // Casting "receivedSignal[o].value" to (unsigned long) because ArduinoLog doesn't support uint64_t for ESP's
-  log.trace(F("store code : %u / %u" CR), (unsigned long)receivedSignal[o].value, receivedSignal[o].time);
-  log.trace(F("Col: val/timestamp" CR));
+  Log.trace(F("store code : %u / %u" CR), (unsigned long)receivedSignal[o].value, receivedSignal[o].time);
+  Log.trace(F("Col: val/timestamp" CR));
   for (int i = 0; i < struct_size; i++) {
-    log.trace(F("mem code : %u / %u" CR), (unsigned long)receivedSignal[i].value, receivedSignal[i].time);
+    Log.trace(F("mem code : %u / %u" CR), (unsigned long)receivedSignal[i].value, receivedSignal[i].time);
   }
 }
 
@@ -1956,12 +1956,12 @@ int getMin() {
  * Check if signal values from RF, IR, SRFB or Weather stations are duplicates
  */
 bool isAduplicateSignal(SIGNAL_SIZE_UL_ULL value) {
-  log.trace(F("isAdupl?" CR));
+  Log.trace(F("isAdupl?" CR));
   for (int i = 0; i < struct_size; i++) {
     if (receivedSignal[i].value == value) {
       unsigned long now = millis();
       if (now - receivedSignal[i].time < time_avoid_duplicate) { // change
-        log.trace(F("no pub. dupl" CR));
+        Log.trace(F("no pub. dupl" CR));
         return true;
       }
     }
