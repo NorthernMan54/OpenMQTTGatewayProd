@@ -1611,6 +1611,9 @@ void loop() {
 #  ifdef ZdisplaySSD1306
         stateSSD1306Display();
 #  endif
+#  ifdef ZgatewayRTL_433
+        stateRTL_433measures();
+#  endif
       }
       if (now > (timer_sys_checks + (TimeBetweenCheckingSYS * 1000)) || !timer_sys_checks) {
 #  if defined(ESP32) && defined(MQTT_HTTPS_FW_UPDATE)
@@ -1907,17 +1910,6 @@ void stateMeasures() {
 #  if defined(ZradioCC1101) || defined(ZradioSX127x)
   SYSdata["mhz"] = (float)receiveMhz;
 #  endif
-#  if defined(ZgatewayRTL_433)
-  if (activeReceiver == ACTIVE_RTL) {
-    SYSdata["RTLRssiThresh"] = (int)getRTLrssiThreshold();
-    SYSdata["RTLRssi"] = (int)getRTLCurrentRSSI();
-    SYSdata["RTLAVGRssi"] = (int)getRTLAverageRSSI();
-    SYSdata["RTLCnt"] = (int)getRTLMessageCount();
-#    ifdef ZradioSX127x
-    SYSdata["RTLOOKThresh"] = (int)getOOKThresh();
-#    endif
-  }
-#  endif
   SYSdata["modules"] = modules;
   pub(subjectSYStoMQTT, SYSdata);
   pubOled(subjectSYStoMQTT, SYSdata);
@@ -1932,16 +1924,16 @@ void storeSignalValue(SIGNAL_SIZE_UL_ULL MQTTvalue) {
   unsigned long now = millis();
   // find oldest value of the buffer
   int o = getMin();
-  Log.trace(F("Min ind: %d" CR), o);
+  log.trace(F("Min ind: %d" CR), o);
   // replace it by the new one
   receivedSignal[o].value = MQTTvalue;
   receivedSignal[o].time = now;
 
   // Casting "receivedSignal[o].value" to (unsigned long) because ArduinoLog doesn't support uint64_t for ESP's
-  Log.trace(F("store code : %u / %u" CR), (unsigned long)receivedSignal[o].value, receivedSignal[o].time);
-  Log.trace(F("Col: val/timestamp" CR));
+  log.trace(F("store code : %u / %u" CR), (unsigned long)receivedSignal[o].value, receivedSignal[o].time);
+  log.trace(F("Col: val/timestamp" CR));
   for (int i = 0; i < struct_size; i++) {
-    Log.trace(F("mem code : %u / %u" CR), (unsigned long)receivedSignal[i].value, receivedSignal[i].time);
+    log.trace(F("mem code : %u / %u" CR), (unsigned long)receivedSignal[i].value, receivedSignal[i].time);
   }
 }
 
@@ -1964,12 +1956,12 @@ int getMin() {
  * Check if signal values from RF, IR, SRFB or Weather stations are duplicates
  */
 bool isAduplicateSignal(SIGNAL_SIZE_UL_ULL value) {
-  Log.trace(F("isAdupl?" CR));
+  log.trace(F("isAdupl?" CR));
   for (int i = 0; i < struct_size; i++) {
     if (receivedSignal[i].value == value) {
       unsigned long now = millis();
       if (now - receivedSignal[i].time < time_avoid_duplicate) { // change
-        Log.trace(F("no pub. dupl" CR));
+        log.trace(F("no pub. dupl" CR));
         return true;
       }
     }

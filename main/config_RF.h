@@ -58,16 +58,12 @@ extern void disablePilightReceive();
 extern void enablePilightReceive();
 #endif
 #ifdef ZgatewayRTL_433
-extern void RTL_433Loop();
-extern void setupRTL_433();
-extern void MQTTtoRTL_433(char* topicOri, JsonObject& RTLdata);
-extern void enableRTLreceive();
-extern void disableRTLreceive();
-extern int getRTLrssiThreshold();
-extern int getRTLCurrentRSSI();
-extern int getRTLMessageCount();
-extern int getRTLAverageRSSI();
-extern int getOOKThresh();
+void RTL_433Loop();
+void setupRTL_433();
+void MQTTtoRTL_433(char* topicOri, JsonObject& RTLdata);
+void enableRTLreceive();
+void disableRTLreceive();
+void stateRTL_433measures();
 
 #  ifdef ZmqttDiscovery
 extern void launchRTL_433Discovery(bool overrideDiscovery);

@@ -32,6 +32,8 @@
 #  include <config_RF.h>
 #  include <rtl_433_ESP.h>
 
+#  include <vector>
+
 #  include "ArduinoLog.h"
 #  include "User_config.h"
 #  ifdef ZmqttDiscovery
@@ -40,7 +42,7 @@
 
 char messageBuffer[JSON_MSG_BUFFER];
 
-rtl_433_ESP rtl_433(-1);
+rtl_433_ESP rtl_433;
 
 #  ifdef ZmqttDiscovery
 SemaphoreHandle_t semaphorecreateOrUpdateDeviceRTL_433;
@@ -277,7 +279,7 @@ void RTL_433Loop() {
   rtl_433.loop();
 }
 
-extern void MQTTtoRTL_433(char* topicOri, JsonObject& RTLdata) {
+void MQTTtoRTL_433(char* topicOri, JsonObject& RTLdata) {
   if (cmpToMainTopic(topicOri, subjectMQTTtoRTL_433)) {
     float tempMhz = RTLdata["mhz"];
     bool success = false;
@@ -314,7 +316,7 @@ extern void MQTTtoRTL_433(char* topicOri, JsonObject& RTLdata) {
     }
     if (RTLdata.containsKey("status")) {
       Log.notice(F("RTL_433 get status:" CR));
-      rtl_433.getStatus(1);
+      rtl_433.getStatus();
       success = true;
     }
     if (success) {
@@ -327,7 +329,11 @@ extern void MQTTtoRTL_433(char* topicOri, JsonObject& RTLdata) {
   }
 }
 
-extern void enableRTLreceive() {
+void stateRTL_433measures() {
+  rtl_433.getStatus();
+}
+
+void enableRTLreceive() {
   Log.notice(F("Switching to RTL_433 Receiver: %FMhz" CR), receiveMhz);
 #  ifdef ZgatewayRF
   disableRFReceive();
@@ -340,35 +346,11 @@ extern void enableRTLreceive() {
 #  endif
 
   rtl_433.initReceiver(RF_MODULE_RECEIVER_GPIO, receiveMhz);
-  rtl_433.enableReceiver(RF_MODULE_RECEIVER_GPIO);
+  rtl_433.enableReceiver();
 }
 
-extern void disableRTLreceive() {
+void disableRTLreceive() {
   Log.trace(F("disableRTLreceive" CR));
-  rtl_433.enableReceiver(-1);
   rtl_433.disableReceiver();
 }
-
-extern int getRTLrssiThreshold() {
-  return rtl_433.rssiThreshold;
-}
-
-extern int getRTLAverageRSSI() {
-  return rtl_433.averageRssi;
-}
-
-extern int getRTLCurrentRSSI() {
-  return rtl_433.currentRssi;
-}
-
-extern int getRTLMessageCount() {
-  return rtl_433.messageCount;
-}
-
-#  if defined(RF_SX1276) || defined(RF_SX1278)
-extern int getOOKThresh() {
-  return rtl_433.OokFixedThreshold;
-}
-#  endif
-
 #endif
