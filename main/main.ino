@@ -1788,9 +1788,6 @@ void loop() {
 #ifdef ZgatewayCloud
       CloudLoop();
 #endif
-#ifdef ZwebUI
-      WebUILoop();
-#endif
     } else {
       // MQTT disconnected
       connected = false;
