@@ -53,6 +53,14 @@ unsigned long timer_sys_checks = 0;
 #  define ARDUINOJSON_ENABLE_STD_STRING 1
 #endif
 
+/**
+ * Deep-sleep for the ESP8266 we need some form of indicator that we have posted the measurements and am ready to deep sleep.
+ * Set this to true in the sensor code after publishing the measurement.
+ */
+#ifdef ESP8266_DEEP_SLEEP_IN_US
+bool ready_to_sleep = false;
+#endif
+
 #include <ArduinoJson.h>
 #include <ArduinoLog.h>
 #include <PubSubClient.h>
@@ -70,6 +78,9 @@ struct GfSun2000Data {};
 #endif
 
 // Modules config inclusion
+#if defined(ZwebUI) && defined(ESP32)
+#  include "config_WebUI.h"
+#endif
 #if defined(ZgatewayRF) || defined(ZgatewayRF2) || defined(ZgatewayPilight) || defined(ZactuatorSomfy) || defined(ZgatewayRTL_433)
 #  include "config_RF.h"
 #endif
@@ -589,6 +600,9 @@ void delayWithOTA(long waitMillis) {
 #    endif
 #  endif
     ArduinoOTA.handle();
+#  if defined(ZwebUI) && defined(ESP32)
+    WebUILoop();
+#  endif
     delay(waitStep);
   }
 #else
@@ -772,6 +786,11 @@ void setup() {
   Log.notice(F("OpenMQTTGateway Version: " OMG_VERSION CR));
 #  endif
 
+#  ifdef ESP8266_DEEP_SLEEP_IN_US
+  Log.notice(F("Setting wake pin for deep sleep." CR));
+  pinMode(ESP8266_DEEP_SLEEP_WAKE_PIN, WAKEUP_PULLUP);
+#  endif
+
 /*
  The 2 modules below are not connection dependent so start them before the connectivity functions
  Note that the ONOFF module need to start after the RN8209 so that the overCurrent task is launched after the setup of the sensor
@@ -819,7 +838,7 @@ void setup() {
   setup_ethernet();
 #endif
 
-#if defined(ZwebUI)
+#if defined(ZwebUI) && defined(ESP32)
   WebUISetup();
   modules.add(ZwebUI);
 #endif
@@ -1369,7 +1388,7 @@ void setup_wifimanager(bool reset_settings) {
   WiFiManagerParameter custom_mqtt_pass("pass", "mqtt pass", mqtt_pass, parameters_size);
   WiFiManagerParameter custom_mqtt_topic("topic", "mqtt base topic", mqtt_topic, mqtt_topic_max_size);
   WiFiManagerParameter custom_mqtt_secure("secure", "mqtt secure", "1", 2, mqtt_secure ? "type=\"checkbox\" checked" : "type=\"checkbox\"");
-  WiFiManagerParameter custom_mqtt_cert("cert", "<br/>mqtt broker cert", mqtt_cert.c_str(), 2048);
+  WiFiManagerParameter custom_mqtt_cert("cert", "<br/>mqtt broker cert", mqtt_cert.c_str(), 4096);
   WiFiManagerParameter custom_gateway_name("name", "gateway name", gateway_name, parameters_size);
   WiFiManagerParameter custom_ota_pass("ota", "ota password", ota_pass, parameters_size);
 #  endif
@@ -1599,6 +1618,9 @@ void loop() {
   if ((Ethernet.hardwareStatus() != EthernetW5100 && Ethernet.linkStatus() == LinkON) || (Ethernet.hardwareStatus() == EthernetW5100)) { //we are able to detect disconnection only on w5200 and w5500
 #endif
     failure_number_ntwk = 0;
+#if defined(ZwebUI) && defined(ESP32)
+    WebUILoop();
+#endif
     if (client.loop()) { // MQTT client is still connected
       InfoIndicatorON();
       failure_number_ntwk = 0;
@@ -1624,12 +1646,16 @@ void loop() {
         stateMeasures();
 #  ifdef ZgatewayBT
         stateBTMeasures(false);
+        btScanWDG();
 #  endif
 #  ifdef ZactuatorONOFF
         stateONOFFMeasures();
 #  endif
 #  ifdef ZdisplaySSD1306
         stateSSD1306Display();
+#  endif
+#  if defined(ZwebUI) && defined(ESP32)
+        stateWebUIStatus();
 #  endif
 #  ifdef ZgatewayCloud
         stateCLOUDStatus();
@@ -1792,6 +1818,17 @@ void loop() {
 #endif
 #if defined(ZdisplaySSD1306)
   loopSSD1306();
+#endif
+
+/**
+ * Deep-sleep for the ESP8266 - e.g. ESP8266_DEEP_SLEEP_IN_US 30000000 for 30 seconds.
+ * Everything is off and (almost) all execution state is lost.
+ */
+#ifdef ESP8266_DEEP_SLEEP_IN_US
+  if (ready_to_sleep) {
+    Log.notice(F("Entering deep sleep for : %l us." CR), ESP8266_DEEP_SLEEP_IN_US);
+    ESP.deepSleep(ESP8266_DEEP_SLEEP_IN_US);
+  }
 #endif
 }
 
@@ -2201,9 +2238,6 @@ void MQTTHttpsFWUpdate(char* topicOri, JsonObject& HttpsFwUpdateData) {
 #  endif
 #  ifdef ESP32
       } else if (strcmp(version, "latest") == 0) {
-#    if defined(ZgatewayBT)
-        stopProcessing();
-#    endif
         systemUrl = RELEASE_LINK + latestVersion + "/" + ENV_NAME + "-firmware.bin";
         url = systemUrl.c_str();
         Log.notice(F("Using system OTA url with latest version %s" CR), url);
@@ -2220,7 +2254,9 @@ void MQTTHttpsFWUpdate(char* topicOri, JsonObject& HttpsFwUpdateData) {
         Log.error(F("Invalid URL" CR));
         return;
       }
-
+#  if defined(ZgatewayBT)
+      stopProcessing();
+#  endif
       Log.warning(F("Starting firmware update" CR));
       SendReceiveIndicatorON();
       ErrorIndicatorON();
@@ -2338,7 +2374,7 @@ void MQTTtoSYS(char* topicOri, JsonObject& SYSdata) { // json object decoding
       client.disconnect();
       WiFi.disconnect(true);
 
-      Log.warning(F("Attempting connection to new AP" CR));
+      Log.warning(F("Attempting connection to new AP %s" CR), (const char*)SYSdata["wifi_ssid"]);
       WiFi.begin((const char*)SYSdata["wifi_ssid"], (const char*)SYSdata["wifi_pass"]);
 #  if defined(ESP32) && (defined(WifiGMode) || defined(WifiPower))
       setESP32WifiPorotocolTxPower();
@@ -2354,6 +2390,21 @@ void MQTTtoSYS(char* topicOri, JsonObject& SYSdata) { // json object decoding
 #  endif
       }
       ESPRestart();
+    }
+
+    bool disconnectClient = false; // Trigger client.disconnet if a user/password change doesn't
+
+    if (SYSdata.containsKey("mqtt_topic") || SYSdata.containsKey("gateway_name")) {
+      if (SYSdata.containsKey("mqtt_topic")) {
+        strncpy(mqtt_topic, SYSdata["mqtt_topic"], parameters_size);
+      }
+      if (SYSdata.containsKey("gateway_name")) {
+        strncpy(gateway_name, SYSdata["gateway_name"], parameters_size);
+      }
+#  ifndef ESPWifiManualSetup
+      saveMqttConfig();
+#  endif
+      disconnectClient = true; // trigger reconnect in loop using the new topic/name
     }
 
 #  ifdef MQTTsetMQTT
@@ -2382,6 +2433,7 @@ void MQTTtoSYS(char* topicOri, JsonObject& SYSdata) { // json object decoding
 #    if defined(ZgatewayBT) && defined(ESP32)
         stopProcessing();
 #    endif
+        disconnectClient = false;
         client.disconnect();
         update_server = true;
         if (secure_connect != mqtt_secure) {
@@ -2405,6 +2457,7 @@ void MQTTtoSYS(char* topicOri, JsonObject& SYSdata) { // json object decoding
 #    if defined(ZgatewayBT) && defined(ESP32)
         stopProcessing();
 #    endif
+        disconnectClient = false;
         client.disconnect();
       }
 
@@ -2448,17 +2501,9 @@ void MQTTtoSYS(char* topicOri, JsonObject& SYSdata) { // json object decoding
       ESPRestart();
     }
 #  endif
-    if (SYSdata.containsKey("mqtt_topic") || SYSdata.containsKey("gateway_name")) {
-      if (SYSdata.containsKey("mqtt_topic")) {
-        strncpy(mqtt_topic, SYSdata["mqtt_topic"], parameters_size);
-      }
-      if (SYSdata.containsKey("gateway_name")) {
-        strncpy(gateway_name, SYSdata["gateway_name"], parameters_size);
-      }
-#  ifndef ESPWifiManualSetup
-      saveMqttConfig();
-#  endif
-      client.disconnect(); // reconnects in loop using the new topic/name
+
+    if (disconnectClient) {
+      client.disconnect();
     }
 #endif
 

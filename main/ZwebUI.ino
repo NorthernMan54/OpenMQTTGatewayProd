@@ -179,6 +179,68 @@ size_t strchrspn(const char* str1, int character) {
   return ret;
 }
 
+int WifiGetRssiAsQuality(int rssi) {
+  int quality = 0;
+
+  if (rssi <= -100) {
+    quality = 0;
+  } else if (rssi >= -50) {
+    quality = 100;
+  } else {
+    quality = 2 * (rssi + 100);
+  }
+  return quality;
+}
+
+char* GetTextIndexed(char* destination, size_t destination_size, uint32_t index, const char* haystack) {
+  // Returns empty string if not found
+  // Returns text of found
+  char* write = destination;
+  const char* read = haystack;
+
+  index++;
+  while (index--) {
+    size_t size = destination_size - 1;
+    write = destination;
+    char ch = '.';
+    while ((ch != '\0') && (ch != '|')) {
+      ch = pgm_read_byte(read++);
+      if (size && (ch != '|')) {
+        *write++ = ch;
+        size--;
+      }
+    }
+    if (0 == ch) {
+      if (index) {
+        write = destination;
+      }
+      break;
+    }
+  }
+  *write = '\0';
+  return destination;
+}
+
+const char kUnescapeCode[] = "&><\"\'\\";
+const char kEscapeCode[] PROGMEM = "&amp;|&gt;|&lt;|&quot;|&apos;|&#92;";
+
+String HtmlEscape(const String unescaped) {
+  char escaped[10];
+  size_t ulen = unescaped.length();
+  String result;
+  result.reserve(ulen); // pre-reserve the required space to avoid mutiple reallocations
+  for (size_t i = 0; i < ulen; i++) {
+    char c = unescaped[i];
+    char* p = strchr(kUnescapeCode, c);
+    if (p != nullptr) {
+      result += GetTextIndexed(escaped, sizeof(escaped), p - kUnescapeCode, kEscapeCode);
+    } else {
+      result += c;
+    }
+  }
+  return result;
+}
+
 #  endif // ESP32
 
 void AddLogData(uint32_t loglevel, const char* log_data, const char* log_data_payload = nullptr, const char* log_data_retained = nullptr) {
@@ -439,13 +501,141 @@ void handleCN() {
 
 /**
  * @brief /WI - Configure WiFi Page
- * 
+ * T: handleWI: uri: /wi, args: 4, method: 1
+ * T: handleWI Arg: 0, s1=SSID
+ * T: handleWI Arg: 1, p1=xxxxxx
+ * T: handleWI Arg: 3, save=
  */
 void handleWI() {
   WEBUI_TRACE_LOG(F("handleWI: uri: %s, args: %d, method: %d" CR), server.uri(), server.args(), server.method());
+  String WiFiScan = "";
   if (server.args()) {
     for (uint8_t i = 0; i < server.args(); i++) {
       WEBUI_TRACE_LOG(F("handleWI Arg: %d, %s=%s" CR), i, server.argName(i).c_str(), server.arg(i).c_str());
+    }
+    if (server.hasArg("scan")) {
+      bool limitScannedNetworks = true;
+      int n = WiFi.scanNetworks();
+
+      WEBUI_TRACE_LOG(F("handleWI scan: found %d" CR), n);
+      if (0 == n) {
+        // WSContentSend_P(PSTR(D_NO_NETWORKS_FOUND));
+        // limitScannedNetworks = false; // in order to show D_SCAN_FOR_WIFI_NETWORKS
+      } else {
+        //sort networks
+        int indices[n];
+        for (uint32_t i = 0; i < n; i++) {
+          indices[i] = i;
+        }
+
+        // RSSI SORT
+        for (uint32_t i = 0; i < n; i++) {
+          for (uint32_t j = i + 1; j < n; j++) {
+            if (WiFi.RSSI(indices[j]) > WiFi.RSSI(indices[i])) {
+              std::swap(indices[i], indices[j]);
+            }
+          }
+        }
+
+        uint32_t networksToShow = n;
+        if ((limitScannedNetworks) && (networksToShow > MAX_WIFI_NETWORKS_TO_SHOW)) {
+          networksToShow = MAX_WIFI_NETWORKS_TO_SHOW;
+        }
+
+        for (uint32_t i = 0; i < n; i++) {
+          if (-1 == indices[i]) {
+            continue;
+          }
+          String cssid = WiFi.SSID(indices[i]);
+          uint32_t cschn = WiFi.channel(indices[i]);
+          for (uint32_t j = i + 1; j < n; j++) {
+            if ((cssid == WiFi.SSID(indices[j])) && (cschn == WiFi.channel(indices[j]))) {
+              WEBUI_TRACE_LOG(F("handleWI scan: duplicate %s" CR), WiFi.SSID(indices[j]).c_str());
+              indices[j] = -1; // set dup aps to index -1
+            }
+          }
+        }
+
+        //display networks in page
+        for (uint32_t i = 0; i < networksToShow; i++) {
+          if (-1 == indices[i]) {
+            continue;
+          } // skip dups
+          int32_t rssi = WiFi.RSSI(indices[i]);
+          WEBUI_TRACE_LOG(F("D_LOG_WIFI D_SSID  %s, D_BSSID  %s,  D_CHANNEL  %d,  D_RSSI  %d" CR),
+                          WiFi.SSID(indices[i]).c_str(), WiFi.BSSIDstr(indices[i]).c_str(), WiFi.channel(indices[i]), rssi);
+          int quality = WifiGetRssiAsQuality(rssi);
+          String ssid_copy = WiFi.SSID(indices[i]);
+          if (!ssid_copy.length()) {
+            ssid_copy = F("no_name");
+          }
+
+          WiFiScan += "<div><a href='#p' onclick='c(this)'>" + HtmlEscape(ssid_copy) + "</a>&nbsp;(" + WiFi.channel(indices[i]) + ")&nbsp<span class='q'>" + quality + "% (" + rssi + " dBm)</span></div>";
+        }
+      }
+      WEBUI_TRACE_LOG(F("handleWI scan: results %s" CR), WiFiScan.c_str());
+
+      char jsonChar[100];
+      serializeJson(modules, jsonChar, measureJson(modules) + 1);
+
+      char buffer[WEB_TEMPLATE_BUFFER_MAX_SIZE];
+
+      snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, header_html, (String(gateway_name) + " - Configure WiFi").c_str());
+      String response = String(buffer);
+      response += String(wifi_script);
+      response += String(script);
+      response += String(style);
+      // wifi_ssid, wifi_password, gateway_name
+      snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_wifi_body, jsonChar, gateway_name, WiFiScan.c_str(), WiFi.SSID(), WiFi.psk());
+      response += String(buffer);
+      snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
+      response += String(buffer);
+      server.send(200, "text/html", response);
+      return;
+
+    } else if (server.hasArg("save")) {
+      StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
+      JsonObject WEBtoSYS = jsonBuffer.to<JsonObject>();
+      bool update = false;
+      if (server.hasArg("s1")) {
+        WEBtoSYS["wifi_ssid"] = server.arg("s1");
+        if (strncmp((char*)WiFi.SSID().c_str(), server.arg("s1").c_str(), parameters_size)) {
+          update = true;
+        }
+      }
+      if (server.hasArg("p1")) {
+        WEBtoSYS["wifi_pass"] = server.arg("p1");
+        if (strncmp((char*)WiFi.psk().c_str(), server.arg("p1").c_str(), parameters_size)) {
+          update = true;
+        }
+      }
+      if (update) {
+        String topic = String(mqtt_topic) + String(gateway_name) + String(subjectMQTTtoSYSset);
+        String output;
+        serializeJson(WEBtoSYS, output);
+        Log.notice(F("[WebUI] MQTTtoSYS %s" CR), output.c_str());
+        Log.warning(F("[WebUI] Save WiFi and Restart" CR));
+        char jsonChar[100];
+        serializeJson(modules, jsonChar, measureJson(modules) + 1);
+        char buffer[WEB_TEMPLATE_BUFFER_MAX_SIZE];
+
+        snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, header_html, (String(gateway_name) + " - Save WiFi and Restart").c_str());
+        String response = String(buffer);
+        response += String(restart_script);
+        response += String(script);
+        response += String(style);
+        snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, reset_body, jsonChar, gateway_name, "Save WiFi and Restart");
+        response += String(buffer);
+        snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
+        response += String(buffer);
+        server.send(200, "text/html", response);
+
+        delay(2000); // Wait for web page to be sent before
+        MQTTtoSYS((char*)topic.c_str(), WEBtoSYS);
+        return;
+      } else {
+        Log.warning(F("[WebUI] No changes" CR));
+      }
     }
   }
   char jsonChar[100];
@@ -455,9 +645,11 @@ void handleWI() {
 
   snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, header_html, (String(gateway_name) + " - Configure WiFi").c_str());
   String response = String(buffer);
+  response += String(wifi_script);
   response += String(script);
   response += String(style);
-  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_wifi_body, jsonChar, gateway_name, "", "", "", "", "", "");
+  // wifi_ssid, wifi_password, gateway_name
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_wifi_body, jsonChar, gateway_name, WiFiScan.c_str(), WiFi.SSID(), WiFi.psk());
   response += String(buffer);
   snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
   response += String(buffer);
@@ -466,7 +658,15 @@ void handleWI() {
 
 /**
  * @brief /MQ - Configure MQTT Page
- * 
+ * T: handleMQ: uri: /mq, args: 8, method: 1
+ * T: handleMQ Arg: 0, mh=192.168.1.11
+ * T: handleMQ Arg: 1, ml=1883
+ * T: handleMQ Arg: 2, mu=1234
+ * T: handleMQ Arg: 3, mp= 
+ * T: handleMQ Arg: 4, sc=on
+ * T: handleMQ Arg: 5, h=
+ * T: handleMQ Arg: 6, mt=home/
+ * T: handleMQ Arg: 7, save=
  */
 void handleMQ() {
   WEBUI_TRACE_LOG(F("handleMQ: uri: %s, args: %d, method: %d" CR), server.uri(), server.args(), server.method());
@@ -474,7 +674,99 @@ void handleMQ() {
     for (uint8_t i = 0; i < server.args(); i++) {
       WEBUI_TRACE_LOG(F("handleMQ Arg: %d, %s=%s" CR), i, server.argName(i).c_str(), server.arg(i).c_str());
     }
+    if (server.hasArg("save")) {
+      StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
+      JsonObject WEBtoSYS = jsonBuffer.to<JsonObject>();
+      bool update = false;
+
+      if (server.hasArg("mh")) {
+        WEBtoSYS["mqtt_server"] = server.arg("mh");
+        if (strncmp(mqtt_server, server.arg("mh").c_str(), parameters_size)) {
+          update = true;
+        }
+      }
+
+      if (server.hasArg("ml")) {
+        WEBtoSYS["mqtt_port"] = server.arg("ml");
+        if (strncmp(mqtt_port, server.arg("ml").c_str(), 6)) {
+          update = true;
+        }
+      }
+
+      if (server.hasArg("mu")) {
+        WEBtoSYS["mqtt_user"] = server.arg("mu");
+        if (strncmp(mqtt_user, server.arg("mu").c_str(), parameters_size)) {
+          update = true;
+        }
+      }
+
+      if (server.hasArg("mp")) {
+        WEBtoSYS["mqtt_pass"] = server.arg("mp");
+        if (strncmp(mqtt_pass, server.arg("mp").c_str(), parameters_size)) {
+          update = true;
+        }
+      }
+
+      // SC - Secure Connection argument is only present when true
+      WEBtoSYS["mqtt_secure"] = server.hasArg("sc");
+      if (mqtt_secure != server.hasArg("sc")) {
+        update = true;
+      }
+
+      if (!update) {
+        Log.warning(F("[WebUI] clearing" CR));
+        for (JsonObject::iterator it = WEBtoSYS.begin(); it != WEBtoSYS.end(); ++it) {
+          WEBtoSYS.remove(it);
+        }
+      }
+
+      if (server.hasArg("h")) {
+        WEBtoSYS["gateway_name"] = server.arg("h");
+        if (strncmp(gateway_name, server.arg("h").c_str(), parameters_size)) {
+          update = true;
+        }
+      }
+
+      if (server.hasArg("mt")) {
+        WEBtoSYS["mqtt_topic"] = server.arg("mt");
+        if (strncmp(mqtt_topic, server.arg("mt").c_str(), parameters_size)) {
+          update = true;
+        }
+      }
+
+#  ifndef ESPWifiManualSetup
+      if (update) {
+        Log.warning(F("[WebUI] Save MQTT and Restart" CR));
+
+        char jsonChar[100];
+        serializeJson(modules, jsonChar, measureJson(modules) + 1);
+        char buffer[WEB_TEMPLATE_BUFFER_MAX_SIZE];
+
+        snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, header_html, (String(gateway_name) + " - Save MQTT and Restart").c_str());
+        String response = String(buffer);
+        response += String(restart_script);
+        response += String(script);
+        response += String(style);
+        snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, reset_body, jsonChar, gateway_name, "Save MQTT and Restart");
+        response += String(buffer);
+        snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
+        response += String(buffer);
+        server.send(200, "text/html", response);
+
+        delay(2000); // Wait for web page to be sent before
+        String topic = String(mqtt_topic) + String(gateway_name) + String(subjectMQTTtoSYSset);
+        String output;
+        serializeJson(WEBtoSYS, output);
+        Log.notice(F("[WebUI] MQTTtoSYS %s" CR), output.c_str());
+        MQTTtoSYS((char*)topic.c_str(), WEBtoSYS);
+        return;
+      } else {
+        Log.warning(F("[WebUI] No changes" CR));
+      }
+#  endif
+    }
   }
+
   char jsonChar[100];
   serializeJson(modules, jsonChar, measureJson(modules) + 1);
 
@@ -484,8 +776,43 @@ void handleMQ() {
   String response = String(buffer);
   response += String(script);
   response += String(style);
-  // mqtt server, mqtt port, client id, mqtt username, mqtt password, topic, Full Topic
-  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_mqtt_body, jsonChar, gateway_name, mqtt_server, mqtt_port, gateway_name, mqtt_user, mqtt_pass, mqtt_topic, "");
+  // mqtt server (mh), mqtt port (ml), mqtt username (mu), mqtt password (mp), secure connection (sc), server certificate (msc), topic (mt)
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_mqtt_body, jsonChar, gateway_name, mqtt_server, mqtt_port, mqtt_user, mqtt_pass, (mqtt_secure ? "checked" : ""), gateway_name, mqtt_topic);
+  response += String(buffer);
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
+  response += String(buffer);
+  server.send(200, "text/html", response);
+}
+
+/**
+ * @brief /LO - Configure Logging Page
+ * T: handleLO: uri: /lo, args: 2, method: 1
+ * T: handleLO Arg: 0, lo=5
+ * T: handleLO Arg: 1, save=
+ */
+void handleLO() {
+  WEBUI_TRACE_LOG(F("handleLO: uri: %s, args: %d, method: %d" CR), server.uri(), server.args(), server.method());
+  if (server.args()) {
+    for (uint8_t i = 0; i < server.args(); i++) {
+      WEBUI_TRACE_LOG(F("handleLO Arg: %d, %s=%s" CR), i, server.argName(i).c_str(), server.arg(i).c_str());
+    }
+    if (server.hasArg("save") && server.hasArg("lo") && server.arg("lo").toInt() != Log.getLevel()) {
+      Log.fatal(F("[WebUI] Log level changed to: %d" CR), server.arg("lo").toInt());
+      Log.setLevel(server.arg("lo").toInt());
+    }
+  }
+
+  char jsonChar[100];
+  serializeJson(modules, jsonChar, measureJson(modules) + 1);
+
+  char buffer[WEB_TEMPLATE_BUFFER_MAX_SIZE];
+
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, header_html, (String(gateway_name) + " - Configure Logging").c_str());
+  String response = String(buffer);
+  response += String(script);
+  response += String(style);
+  int logLevel = Log.getLevel();
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_logging_body, jsonChar, gateway_name, (logLevel == 0 ? "selected" : ""), (logLevel == 1 ? "selected" : ""), (logLevel == 2 ? "selected" : ""), (logLevel == 3 ? "selected" : ""), (logLevel == 4 ? "selected" : ""), (logLevel == 5 ? "selected" : ""), (logLevel == 6 ? "selected" : ""));
   response += String(buffer);
   snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
   response += String(buffer);
@@ -703,25 +1030,82 @@ void handleUP() {
     for (uint8_t i = 0; i < server.args(); i++) {
       WEBUI_TRACE_LOG(F("handleUP Arg: %d, %s=%s" CR), i, server.argName(i).c_str(), server.arg(i).c_str());
     }
-  } else {
-    char jsonChar[100];
-    serializeJson(modules, jsonChar, measureJson(modules) + 1);
+    StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
+    JsonObject WEBtoSYS = jsonBuffer.to<JsonObject>();
 
-    char buffer[WEB_TEMPLATE_BUFFER_MAX_SIZE];
+    if (server.hasArg("o")) {
+      WEBtoSYS["url"] = server.arg("o");
+      WEBtoSYS["version"] = "test";
+      WEBtoSYS["password"] = ota_pass;
 
-    snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, header_html, (String(gateway_name) + " - Firmware Upgrade").c_str());
-    String response = String(buffer);
-    response += String(script);
-    response += String(style);
-    snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, upgrade_body, jsonChar, gateway_name, "http://upgrade/");
-    response += String(buffer);
-    snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
-    response += String(buffer);
-    server.send(200, "text/html", response);
+      char jsonChar[100];
+      serializeJson(modules, jsonChar, measureJson(modules) + 1);
+      char buffer[WEB_TEMPLATE_BUFFER_MAX_SIZE];
+
+      snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, header_html, (String(gateway_name) + " - Updating Firmware and Restart").c_str());
+      String response = String(buffer);
+      response += String(restart_script);
+      response += String(script);
+      response += String(style);
+      snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, reset_body, jsonChar, gateway_name, "Updating Firmware and Restart");
+      response += String(buffer);
+      snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
+      response += String(buffer);
+      server.send(200, "text/html", response);
+
+      delay(2000); // Wait for web page to be sent before
+      String topic = String(mqtt_topic) + String(gateway_name) + String(subjectMQTTtoSYSupdate);
+      String output;
+      serializeJson(WEBtoSYS, output);
+      Log.notice(F("[WebUI] MQTTtoSYSupdate %s" CR), output.c_str());
+      MQTTHttpsFWUpdate((char*)topic.c_str(), WEBtoSYS);
+      return;
+    } else if (server.hasArg("le")) {
+      uint32_t le = server.arg("le").toInt();
+      if (le != 0) {
+        WEBtoSYS["version"] = (le == 1 ? "latest" : (le == 2 ? "dev" : "unknown"));
+        WEBtoSYS["password"] = ota_pass;
+
+        char jsonChar[100];
+        serializeJson(modules, jsonChar, measureJson(modules) + 1);
+        char buffer[WEB_TEMPLATE_BUFFER_MAX_SIZE];
+
+        snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, header_html, (String(gateway_name) + " - Updating Firmware and Restart").c_str());
+        String response = String(buffer);
+        response += String(restart_script);
+        response += String(script);
+        response += String(style);
+        snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, reset_body, jsonChar, gateway_name, "Updating Firmware and Restart");
+        response += String(buffer);
+        snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
+        response += String(buffer);
+        server.send(200, "text/html", response);
+
+        delay(2000); // Wait for web page to be sent before
+        String topic = String(mqtt_topic) + String(gateway_name) + String(subjectMQTTtoSYSupdate);
+        String output;
+        serializeJson(WEBtoSYS, output);
+        Log.notice(F("[WebUI] MQTTtoSYSupdate %s" CR), output.c_str());
+        MQTTHttpsFWUpdate((char*)topic.c_str(), WEBtoSYS);
+        return;
+      }
+    }
   }
-}
+  char jsonChar[100];
+  serializeJson(modules, jsonChar, measureJson(modules) + 1);
 
-uint32_t logIndex = 0;
+  char buffer[WEB_TEMPLATE_BUFFER_MAX_SIZE];
+
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, header_html, (String(gateway_name) + " - Firmware Upgrade").c_str());
+  String response = String(buffer);
+  response += String(script);
+  response += String(style);
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, upgrade_body, jsonChar, gateway_name, "https://github.com/1technophile/OpenMQTTGateway/releases/");
+  response += String(buffer);
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
+  response += String(buffer);
+  server.send(200, "text/html", response);
+}
 
 /**
  * @brief /CS - Serial Console and Command Line
@@ -837,12 +1221,13 @@ void WebUISetup() {
   server.on("/up", handleUP); // Firmware Upgrade
 
   server.on("/cn", handleCN); // Configuration
-  server.on("/wi", handleWI); // Configuration Wifi
-  server.on("/mq", handleMQ); // Configuration MQTT
+  server.on("/wi", handleWI); // Configure Wifi
+  server.on("/mq", handleMQ); // Configure MQTT
 #  if defined(ZgatewayCloud)
-  server.on("/cl", handleCL); // Cloud configuration
+  server.on("/cl", handleCL); // Configure Cloud
   server.on("/tk", handleTK); // Store Device Token
 #  endif
+  server.on("/lo", handleLO); // Configure Logging
 
   server.on("/rt", handleRT); // Reset configuration ( Erase and Restart )
   server.begin();
@@ -850,6 +1235,7 @@ void WebUISetup() {
   Log.begin(LOG_LEVEL, &WebLog);
 
   Log.notice(F("OpenMQTTGateway URL: http://%s/" CR), WiFi.localIP().toString().c_str());
+  displayPrint("URL: http://", (char*)WiFi.localIP().toString().c_str());
   Log.notice(F("ZwebUI setup done" CR));
 }
 
@@ -998,7 +1384,7 @@ void webUIPubPrint(const char* topicori, JsonObject& data) {
       strlcpy(message->title, strtok(topic, "/"), WEBUI_TEXT_WIDTH);
       free(topic);
 
-      WEBUI_TRACE_LOG(F("[ webUIPubPrint ] switch %s " CR), message->title);
+      //  WEBUI_TRACE_LOG(F("[ webUIPubPrint ] switch %s " CR), message->title);
       switch (webUIHash(message->title)) {
         case webUIHash("SYStoMQTT"): {
           // {"uptime":456356,"version":"lilygo-rtl_433-test-A-v1.1.1-25-g574177d[lily-cloud]","freemem":125488,"mqttport":"1883","mqttsecure":false,"freestack":3752,"rssi":-36,"SSID":"The_Beach","BSSID":"64:A5:C3:69:C3:38","ip":"192.168.1.239","mac":"4C:75:25:A8:D5:D8","actRec":3,"mhz":433.92,"RTLRssiThresh":-98,"RTLRssi":-108,"RTLAVGRssi":-107,"RTLCnt":121707,"RTLOOKThresh":90,"modules":["LILYGO_OLED","CLOUD","rtl_433"]}
@@ -1042,72 +1428,83 @@ void webUIPubPrint(const char* topicori, JsonObject& data) {
 
 #  ifdef ZgatewayRTL_433
         case webUIHash("RTL_433toMQTT"): {
-          // {"model":"Acurite-Tower","id":2043,"channel":"B","battery_ok":1,"temperature_C":5.3,"humidity":81,"mic":"CHECKSUM","protocol":"Acurite 592TXR Temp/Humidity, 5n1 Weather Station, 6045 Lightning, 3N1, Atlas","rssi":-81,"duration":121060}
+          if (strncmp(data["model"], "status", 6)) { // Does not contain "status"
+            // {"model":"Acurite-Tower","id":2043,"channel":"B","battery_ok":1,"temperature_C":5.3,"humidity":81,"mic":"CHECKSUM","protocol":"Acurite 592TXR Temp/Humidity, 5n1 Weather Station, 6045 Lightning, 3N1, Atlas","rssi":-81,"duration":121060}
 
-          // Line 1
+            // Line 1
 
-          strlcpy(message->line1, data["model"], WEBUI_TEXT_WIDTH);
+            strlcpy(message->line1, data["model"], WEBUI_TEXT_WIDTH);
 
-          // Line 2
+            // Line 2
 
-          String id = data["id"];
-          String channel = data["channel"];
-          String line2 = "id: " + id + " channel: " + channel;
-          line2.toCharArray(message->line2, WEBUI_TEXT_WIDTH);
-
-          // Line 3
-
-          String line3 = "";
-
-          if (data.containsKey("temperature_C")) {
-            float temperature_C = data["temperature_C"];
-            char temp[5];
-
-            if (displayMetric) {
-              dtostrf(temperature_C, 3, 1, temp);
-              line3 = "temp: " + (String)temp + "°C ";
-            } else {
-              dtostrf(convertTemp_CtoF(temperature_C), 3, 1, temp);
-              line3 = "temp: " + (String)temp + "°F ";
+            if (data["id"] || data["channel"]) {
+              String id = data["id"];
+              String channel = data["channel"];
+              String line2 = "id: " + id + " channel: " + channel;
+              line2.toCharArray(message->line2, WEBUI_TEXT_WIDTH);
             }
-          }
 
-          float humidity = data["humidity"];
-          if (data.containsKey("humidity") && humidity <= 100 && humidity >= 0) {
-            char hum[5];
-            dtostrf(humidity, 3, 1, hum);
-            line3 += "hum: " + (String)hum + "% ";
-          }
-          if (data.containsKey("wind_avg_km_h")) {
-            float wind_avg_km_h = data["wind_avg_km_h"];
-            char wind[6];
+            // Line 3
 
-            if (displayMetric) {
-              dtostrf(wind_avg_km_h, 3, 1, wind);
-              line3 += "wind: " + (String)wind + "km/h ";
-            } else {
-              dtostrf(convert_kmph2mph(wind_avg_km_h), 3, 1, wind);
-              line3 += "wind: " + (String)wind + "mp/h ";
+            String line3 = "";
+
+            if (data.containsKey("temperature_C")) {
+              float temperature_C = data["temperature_C"];
+              char temp[5];
+
+              if (displayMetric) {
+                dtostrf(temperature_C, 3, 1, temp);
+                line3 = "temp: " + (String)temp + "°C ";
+              } else {
+                dtostrf(convertTemp_CtoF(temperature_C), 3, 1, temp);
+                line3 = "temp: " + (String)temp + "°F ";
+              }
             }
-          }
 
-          line3.toCharArray(message->line3, WEBUI_TEXT_WIDTH);
+            float humidity = data["humidity"];
+            if (data.containsKey("humidity") && humidity <= 100 && humidity >= 0) {
+              char hum[5];
+              dtostrf(humidity, 3, 1, hum);
+              line3 += "hum: " + (String)hum + "% ";
+            }
+            if (data.containsKey("wind_avg_km_h")) {
+              float wind_avg_km_h = data["wind_avg_km_h"];
+              char wind[6];
 
-          // Line 4
+              if (displayMetric) {
+                dtostrf(wind_avg_km_h, 3, 1, wind);
+                line3 += "wind: " + (String)wind + "km/h ";
+              } else {
+                dtostrf(convert_kmph2mph(wind_avg_km_h), 3, 1, wind);
+                line3 += "wind: " + (String)wind + "mp/h ";
+              }
+            }
 
-          String rssi = data["rssi"];
-          String battery_ok = data["battery_ok"];
+            line3.toCharArray(message->line3, WEBUI_TEXT_WIDTH);
 
-          String line4 = "batt: " + battery_ok + " rssi: " + rssi;
-          line4.toCharArray(message->line4, WEBUI_TEXT_WIDTH);
+            // Line 4
 
-          // Queue completed message
+            String line4 = "";
+            if (data["battery_ok"]) {
+              line4 = "batt: " + data["battery_ok"].as<String>();
+            } else {
+              line4 = "pulses: " + data["pulses"].as<String>();
+            }
 
-          if (xQueueSend(webUIQueue, (void*)&message, 0) != pdTRUE) {
-            Log.error(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
-            free(message);
+            line4 += " rssi: " + data["rssi"].as<String>();
+            line4.toCharArray(message->line4, WEBUI_TEXT_WIDTH);
+
+            // Queue completed message
+
+            if (xQueueSend(webUIQueue, (void*)&message, 0) != pdTRUE) {
+              Log.error(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
+              free(message);
+            } else {
+              // Log.notice(F("[ WebUI ] Queued %s" CR), message->title);
+            }
           } else {
-            // Log.notice(F("[ WebUI ] Queued %s" CR), message->title);
+            Log.error(F("[ WebUI ] rtl_433 not displaying %s" CR), message->title);
+            free(message);
           }
           break;
         }
@@ -1488,7 +1885,7 @@ void webUIPubPrint(const char* topicori, JsonObject& data) {
                 Log.error(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
                 free(message);
               } else {
-                Log.notice(F("[ WebUI ] Queued %s" CR), message->title);
+                // Log.notice(F("[ WebUI ] Queued %s" CR), message->title);
               }
             } else {
               WEBUI_TRACE_LOG(F("[ WebUI ] incomplete messaage %s" CR), topicori);

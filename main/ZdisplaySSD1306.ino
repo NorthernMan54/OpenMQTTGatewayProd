@@ -67,7 +67,7 @@ void setupSSD1306() {
   Log.trace(F("ZdisplaySSD1306 log-oled: %T" CR), logToOLEDDisplay);
   Log.trace(F("ZdisplaySSD1306 json-oled: %T" CR), jsonDisplay);
   Log.trace(F("ZdisplaySSD1306 DISPLAY_PAGE_INTERVAL: %d" CR), DISPLAY_PAGE_INTERVAL);
-  Log.trace(F("ZdisplaySSD1306 DISPLAY_IDLE_LOGO: %T" CR), DISPLAY_IDLE_LOGO);
+  Log.trace(F("ZdisplaySSD1306 DISPLAY_IDLE_LOGO: %T" CR), idlelogo);
   Log.trace(F("ZdisplaySSD1306 DISPLAY_FLIP: %T" CR), displayFlip);
   Oled.begin();
   Log.notice(F("Setup SSD1306 Display end" CR));
@@ -176,8 +176,10 @@ void MQTTtoSSD1306(char* topicOri, JsonObject& SSD1306data) { // json object dec
     } else if (SSD1306data.containsKey("erase") && SSD1306data["erase"]) {
       // Erase config from NVS (non-volatile storage)
       preferences.begin(Gateway_Short_Name, false);
-      success = preferences.remove("SSD1306Config");
-      preferences.end();
+      if (preferences.isKey("SSD1306Config")) {
+        success = preferences.remove("SSD1306Config");
+        preferences.end();
+      }
       if (success) {
         Log.notice(F("SSD1306 config erased" CR));
       }
@@ -222,8 +224,7 @@ void SSD1306Config_init() {
 bool SSD1306Config_load() {
   StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
   preferences.begin(Gateway_Short_Name, true);
-  bool exists = preferences.isKey("SSD1306Config");
-  if (exists) {
+  if (preferences.isKey("SSD1306Config")) {
     auto error = deserializeJson(jsonBuffer, preferences.getString("SSD1306Config", "{}"));
     preferences.end();
     if (error) {
