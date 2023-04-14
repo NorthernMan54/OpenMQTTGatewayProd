@@ -1663,9 +1663,6 @@ void loop() {
 #  ifdef ZwebUI
         stateWebUIStatus();
 #  endif
-#  ifdef ZgatewayRTL_433
-        stateRTL_433measures();
-#  endif
       }
       if (now > (timer_sys_checks + (TimeBetweenCheckingSYS * 1000)) || !timer_sys_checks) {
 #  if defined(ESP32) && defined(MQTT_HTTPS_FW_UPDATE)
